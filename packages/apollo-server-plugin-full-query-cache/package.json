@@ -1,0 +1,25 @@
+{
+  "name": "apollo-server-plugin-full-query-cache",
+  "version": "0.0.0-alpha.1",
+  "description": "Apollo Server full query cache",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/apollographql/apollo-server/tree/master/packages/apollo-server-plugin-full-query-cache"
+  },
+  "keywords": [],
+  "author": "Apollo <npm@apollographql.com>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/apollographql/apollo-server/issues"
+  },
+  "homepage": "https://github.com/apollographql/apollo-server#readme",
+  "engines": {
+    "node": ">=6"
+  },
+  "dependencies": {
+    "apollo-server-caching": "file:../apollo-server-caching",
+    "apollo-server-plugin-base": "file:../apollo-server-plugin-base"
+  }
+}
