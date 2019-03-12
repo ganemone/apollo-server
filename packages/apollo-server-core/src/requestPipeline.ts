@@ -290,26 +290,43 @@ export async function processGraphQLRequest<TContext>(
       );
     }
 
-    const executionDidEnd = await dispatcher.invokeDidStartHook(
-      'executionDidStart',
+    let response: GraphQLResponse;
+
+    // Ask plugins (eg, full query cache) for responses.
+    const pluginGraphQLResponses = (await dispatcher.invokeHookAsync(
+      'execute',
       requestContext as WithRequired<
         typeof requestContext,
         'document' | 'operation' | 'operationName'
       >,
-    );
+    )).filter(x => x);
+    if (pluginGraphQLResponses.length > 1) {
+      // XXX how hard would it be to make this error message more actionable?
+      // We'd need to know plugin names...
+      throw new Error('Multiple plugins provided a direct execution result');
+    }
+    if (pluginGraphQLResponses.length > 0) {
+      response = pluginGraphQLResponses[0]!;
+    } else {
+      const executionDidEnd = await dispatcher.invokeDidStartHook(
+        'executionDidStart',
+        requestContext as WithRequired<
+          typeof requestContext,
+          'document' | 'operation' | 'operationName'
+        >,
+      );
 
-    let response: GraphQLResponse;
-
-    try {
-      response = (await execute(
-        requestContext.document,
-        request.operationName,
-        request.variables,
-      )) as GraphQLResponse;
-      executionDidEnd();
-    } catch (executionError) {
-      executionDidEnd(executionError);
-      return sendErrorResponse(executionError);
+      try {
+        response = (await execute(
+          requestContext.document,
+          request.operationName,
+          request.variables,
+        )) as GraphQLResponse;
+        executionDidEnd();
+      } catch (executionError) {
+        executionDidEnd(executionError);
+        return sendErrorResponse(executionError);
+      }
     }
 
     const formattedExtensions = extensionStack.format();

@@ -1,14 +1,19 @@
-// import * as assert from 'assert';
+import { print } from 'graphql/language';
+
 import {
   ApolloServerPlugin,
   GraphQLRequestListener,
   GraphQLRequestContext,
+  GraphQLResponse,
 } from 'apollo-server-plugin-base';
-// import { ApolloError } from 'apollo-server-errors';
-import { KeyValueCache } from 'apollo-server-caching';
+import { KeyValueCache, PrefixingKeyValueCache } from 'apollo-server-caching';
+import { WithRequired, ValueOrPromise } from 'apollo-server-env';
 
-// XXX Duplicates non-exported type from apollo-server-plugin-base.
-type ValueOrPromise<T> = T | Promise<T>;
+// XXX This should use createSHA from apollo-server-core in order to work on
+// non-Node environments. I'm not sure where that should end up ---
+// apollo-server-sha as its own tiny module? apollo-server-env seems bad because
+// that would add sha.js to unnecessary places, I think?
+import { createHash } from 'crypto';
 
 interface Options<TContext = Record<string, any>> {
   // Underlying cache used to save results. All writes will be under keys that
@@ -59,21 +64,121 @@ interface Options<TContext = Record<string, any>> {
   // the request other than the query document, operation name, variables, and
   // session ID. For example, responses that include translatable text may want
   // to return a string derived from
-  // requestContext.request.http.headers.get('Accept-Language').
+  // requestContext.request.http.headers.get('Accept-Language'). The data may
+  // be anything that can be JSON-stringified.
   extraCacheKeyData?(
     requestContext: GraphQLRequestContext<TContext>,
-  ): ValueOrPromise<string | null>;
+  ): ValueOrPromise<any>;
 }
 
-export default function plugin(options: Options = Object.create(null)) {
-  //  let cache: KeyValueCache;
-  console.log(options);
+enum SessionMode {
+  NoSession,
+  Private,
+  AuthenticatedPublic,
+}
 
-  return (): ApolloServerPlugin => ({
-    requestDidStart(): GraphQLRequestListener<any> {
+function sha(s: string) {
+  return createHash('sha256')
+    .update(s)
+    .digest('hex');
+}
+
+function cacheKey(baseCacheKey: any, sessionMode: SessionMode) {
+  return sha(JSON.stringify({ ...baseCacheKey, sessionMode }));
+}
+
+export default function plugin(
+  options: Options = Object.create(null),
+): ApolloServerPlugin {
+  return {
+    requestDidStart(
+      outerRequestContext: GraphQLRequestContext<any>,
+    ): GraphQLRequestListener<any> {
+      const cache = new PrefixingKeyValueCache(
+        options.cache || outerRequestContext.cache!,
+        'fqc:',
+      );
+
+      let invokedHooks = false;
+      let sessionId: string | null = null;
+      let extraCacheKeyData: any = null;
+
+      async function cacheGet(
+        baseCacheKey: any,
+        sessionMode: SessionMode,
+      ): Promise<GraphQLResponse | null> {
+        const key = cacheKey(baseCacheKey, sessionMode);
+        const value = await cache.get(key);
+        if (value === undefined) {
+          return null;
+        }
+        return JSON.parse(value);
+      }
+
       return {
-        async didResolveOperation({}) {},
+        async execute(
+          requestContext: WithRequired<
+            GraphQLRequestContext<any>,
+            'document' | 'operationName' | 'operation'
+          >,
+        ): Promise<GraphQLResponse | null> {
+          // Call hooks. Save values which will be used in XXX as well.
+          if (options.sessionId) {
+            sessionId = await options.sessionId(requestContext);
+          }
+          if (options.extraCacheKeyData) {
+            extraCacheKeyData = await options.extraCacheKeyData(requestContext);
+          }
+          invokedHooks = true;
+
+          const baseCacheKey = {
+            // XXX could also have requestPipeline add the unparsed document to requestContext;
+            // can't just use requestContext.request.query because that won't be set for APQs
+            document: print(requestContext.document),
+            operationName: requestContext.operationName,
+            variables: requestContext.request.variables,
+            // XXX look at extensions?
+            extra: extraCacheKeyData,
+          };
+
+          if (sessionId === null) {
+            return cacheGet(baseCacheKey, SessionMode.NoSession);
+          } else {
+            const privateResponse = await cacheGet(
+              { ...baseCacheKey, sessionId },
+              SessionMode.Private,
+            );
+            if (privateResponse !== null) {
+              return privateResponse;
+            }
+            return cacheGet(baseCacheKey, SessionMode.AuthenticatedPublic);
+          }
+        },
+
+        async willSendResponse(
+          requestContext: WithRequired<GraphQLRequestContext<any>, 'response'>,
+        ) {
+          const { response } = requestContext;
+          if (response.errors || !response.data) {
+            // This plugin never caches errors.
+            return;
+          }
+
+          // We're pretty sure that any path that calls willSendResponse with a
+          // non-error response will have already called our execute hook above,
+          // but let's just double-check that, since accidentally ignoring
+          // sessionId could be a big security hole.
+          if (!invokedHooks) {
+            throw new Error(
+              'willSendResponse called without error, but execute not called?',
+            );
+          }
+
+          // XXX look at actual cache flags
+        },
       };
     },
-  });
+  };
 }
+
+// XXX care about extension or about HTTP headers?
