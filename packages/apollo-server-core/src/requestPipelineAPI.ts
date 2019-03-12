@@ -12,7 +12,6 @@ import {
   DocumentNode,
 } from 'graphql';
 import { KeyValueCache } from 'apollo-server-caching';
-import { CacheHint } from 'apollo-cache-control';
 
 export interface CacheHint {
   maxAge?: number;
