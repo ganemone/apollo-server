@@ -174,6 +174,10 @@ export default function plugin(
             );
           }
 
+          if (!requestContext.overallCachePolicy) {
+            // XXX here
+          }
+
           // XXX look at actual cache flags
         },
       };
